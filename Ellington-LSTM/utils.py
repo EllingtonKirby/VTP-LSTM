@@ -12,9 +12,8 @@ class ngsimDataset(Dataset):
 
     def __init__(self, grid_file, tracks_file, t_h=30, t_f=10, d_s=2, enc_size = 64, grid_size = (13,3)):
         data_df = pd.read_csv(grid_file)
-        tracks_df = pd.read_csv(tracks_file)
         self.D = data_df.to_numpy()
-        self.T = np.stack((np.stack(tracks_df['X_Pos'].to_numpy()), np.stack(tracks_df['Y_Pos'].to_numpy())), axis=1)
+        self.T = np.load(tracks_file, allow_pickle=True)
         self.t_h = t_h  # length of track history
         self.t_f = t_f  # length of predicted trajectory
         self.d_s = d_s  # down sampling rate of all sequences
@@ -31,9 +30,9 @@ class ngsimDataset(Dataset):
     def __getitem__(self, idx):
 
         dsId = 0
-        vehId = self.D[idx, 0].astype(int)
-        t = self.D[idx, 1]
-        grid = self.D[idx,5:]
+        vehId = self.D[idx, 1].astype(int)
+        t = self.D[idx, 3].astype(int)
+        grid = self.D[idx,6:]
         neighbors = []
 
         hist = self.getHistory(vehId,t,vehId,dsId) # history of the same target vehicle
@@ -44,9 +43,9 @@ class ngsimDataset(Dataset):
             neighbors.append(self.getHistory(i.astype(int), t,vehId,dsId)) # history of neighbor vehicles
 
         lon_enc = np.zeros([2])
-        lon_enc[int(self.D[idx, 3] - 1)] = 1
+        # lon_enc[int(self.D[idx, 5] - 1)] = 1
         lat_enc = np.zeros([3])
-        lat_enc[int(self.D[idx, 4] - 1)] = 1
+        # lat_enc[int(self.D[idx, 4] - 1)] = 1
 
 
         return hist,fut,neighbors,lat_enc,lon_enc, vehId, t, dsId
@@ -58,18 +57,18 @@ class ngsimDataset(Dataset):
         if vehId == 0:
             return np.empty([0,2])
         else:
-            if self.T.shape[1]<=vehId:
+            if self.T.shape[0]<=vehId:
                 return np.empty([0,2])
-            refTrack = self.T[refVehId].transpose() # take the target vehicle as the reference point
-            vehTrack = self.T[vehId].transpose()
-            refPos = refTrack[t][0,1:3] # 1:3: time and x, y
+            refTrack = self.T[refVehId] # take the target vehicle as the reference point
+            vehTrack = self.T[vehId]
+            refPos = refTrack[t] # 1:3: time and x, y
 
-            if vehTrack.size==0 or vehTrack[t, 0].size==0:
+            if vehTrack.size==0:
                  return np.empty([0,2])
             else:
                 stpt = np.maximum(0, t - self.t_h)
                 enpt = t + 1
-                hist = vehTrack[stpt:enpt:self.d_s,1:3]-refPos # start, end, step is the downsample (self.d_s)
+                hist = vehTrack[stpt:enpt:self.d_s]-refPos # start, end, step is the downsample (self.d_s)
 
             if len(hist) < self.t_h//self.d_s + 1:
                 return np.empty([0,2])
@@ -79,11 +78,11 @@ class ngsimDataset(Dataset):
 
     ## Helper function to get track future
     def getFuture(self, vehId, t,dsId):
-        vehTrack = self.T[vehId].transpose()
-        refPos = vehTrack[t][0, 1:3]
-        stpt = vehTrack[t, 0].item() + self.d_s
-        enpt = np.minimum(len(vehTrack), (vehTrack[t, 0]).item() + self.t_f + 1)
-        fut = vehTrack[stpt:enpt:self.d_s,1:3]-refPos
+        vehTrack = self.T[vehId]
+        refPos = vehTrack[t]
+        stpt = t + self.d_s
+        enpt = np.minimum(len(vehTrack), t).item() + self.t_f + 1
+        fut = vehTrack[stpt:enpt:self.d_s]-refPos
         return fut
 
 
@@ -176,7 +175,7 @@ def maskedMSE(y_pred, y_gt, mask):
     acc[:,:,1] = out
     acc = acc*mask
     lossVal = torch.sum(acc)/torch.sum(mask) # although both uses out, the average will be correct, 2*out/2
-    return lossVal
+    return lossVal, acc
 
 ## MSE loss for complete sequence, outputs a sequence of MSE values, uses mask for variable output lengths, used for evaluation
 def maskedMSETest(y_pred, y_gt, mask):
